@@ -1,60 +1,61 @@
-from pydub import AudioSegment
 import numpy as np
-from scipy.signal import correlate
-import os
+import librosa
+from pydub import AudioSegment
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List
 
-def convert_to_wav(input_path):
-    """Convierte un archivo de audio a formato WAV y lo guarda en la misma carpeta."""
-    output_path = os.path.splitext(input_path)[0] + ".wav"
-    if not os.path.exists(output_path):  # Evitar conversiones innecesarias
-        audio = AudioSegment.from_file(input_path)
-        audio.export(output_path, format="wav")
-    return output_path
+def find_audio_matches_spectrogram(long_audio_path: str, short_audio_path: str, threshold: float = 0.8) -> List[int]:
+    # Cargar y pre-procesar los audios
+    long_audio = AudioSegment.from_file(long_audio_path).set_frame_rate(22050).set_channels(1)
+    short_audio = AudioSegment.from_file(short_audio_path).set_frame_rate(22050).set_channels(1)
+    
+    long_y, long_sr = np.array(long_audio.get_array_of_samples()).astype(np.float32), long_audio.frame_rate
+    short_y, short_sr = np.array(short_audio.get_array_of_samples()).astype(np.float32), short_audio.frame_rate
 
-def audio_to_array(audio_path):
-    """Carga un archivo de audio en WAV y lo convierte en un array de numpy"""
-    audio = AudioSegment.from_file(audio_path)
-    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-    return samples, audio.frame_rate
+    # Generar espectrogramas de Mel
+    long_mel = librosa.feature.melspectrogram(y=long_y, sr=long_sr)
+    short_mel = librosa.feature.melspectrogram(y=short_y, sr=short_sr)
+    
+    # Aplanar el espectrograma corto para la comparación
+    short_mel_flat = short_mel.flatten().reshape(1, -1)
+    
+    long_mel_len = long_mel.shape[1]
+    short_mel_len = short_mel.shape[1]
 
-def find_filtered_occurrences(long_audio_path, short_audio_path, min_gap=10):
-    """Encuentra ocurrencias del fragmento corto en el audio largo con un mínimo de separación entre coincidencias."""
-    # Convertir a WAV
-    long_audio_wav = convert_to_wav(long_audio_path)
-    short_audio_wav = convert_to_wav(short_audio_path)
+    if long_mel_len < short_mel_len:
+        return []
 
-    # Cargar audios en formato NumPy
-    long_audio, long_rate = audio_to_array(long_audio_wav)
-    short_audio, short_rate = audio_to_array(short_audio_wav)
+    match_seconds = []
+    
+    step_size = int(short_mel_len * 0.5)
+    
+    for i in range(0, long_mel_len - short_mel_len + 1, step_size):
+        segment_mel = long_mel[:, i:i + short_mel_len]
+        segment_mel_flat = segment_mel.flatten().reshape(1, -1)
+        
+        # Calcular la similitud de coseno
+        similarity = cosine_similarity(segment_mel_flat, short_mel_flat)[0][0]
 
-    if long_rate != short_rate:
-        raise ValueError("Las tasas de muestreo de los audios no coinciden.")
+        if similarity > threshold:
+            start_time_ms = (i * 512 / long_sr) * 1000
+            match_seconds.append(round(start_time_ms / 1000))
 
-    # Correlación cruzada para detectar similitudes
-    correlation = correlate(long_audio, short_audio, mode='valid')
+    return match_seconds
 
-    # Ajustar el umbral dinámicamente basado en el valor máximo de correlación
-    threshold = np.max(correlation) * 0.3  # 70% del máximo valor de correlación
+# --- Uso del script ---
 
-    # Encontrar picos que superen el umbral
-    raw_occurrences = np.where(correlation > threshold)[0] / long_rate  # Convertir a segundos
+if __name__ == "__main__":
+    long_audio_file = "audioscompletos/vital6FEB.wav"
+    short_audio_file = "data/espaciovital_mid.mp3"
 
-    # Filtrar coincidencias que estén demasiado cerca
-    filtered_occurrences = []
-    last_time = -min_gap  # Para que el primero siempre se guarde
+    similarity_threshold = 0.5
+    matches = find_audio_matches_spectrogram(long_audio_file, short_audio_file, similarity_threshold)
 
-    for time in raw_occurrences:
-        if time - last_time >= min_gap:
-            filtered_occurrences.append(time)
-            last_time = time
-
-    return filtered_occurrences
-
-# Rutas de los archivos de audio
-long_audio_path = "audioscompletos/vital6FEB.mp3"
-short_audio_path = "data/espaciovital.mp3"
-
-# Buscar ocurrencias con mínimo 1 minuto (60s) de separación
-positions = find_filtered_occurrences(long_audio_path, short_audio_path, min_gap=60)
-
-print("El fragmento apareció en los segundos:", positions)
+    unique_matches = sorted(list(set(matches)))
+    
+    print(f"Número de veces que el audio corto aparece: {len(unique_matches)}")
+    print("Segundos en los que se encontraron coincidencias:")
+    for second in unique_matches:
+        minutes = second // 60
+        remaining_seconds = second % 60
+        print(f" - Minuto: {minutes} | Segundos: {remaining_seconds}")

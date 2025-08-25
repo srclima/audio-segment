@@ -1,3 +1,0 @@
-pip install pydub numpy scipy
-pip install tensorflow librosa numpy pandas scikit-learn
-pip install pydub ffmpeg
