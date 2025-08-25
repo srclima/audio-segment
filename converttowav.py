@@ -1,7 +1,7 @@
 from pydub import AudioSegment
 import os
 
-def convert_mp3_to_wav(input_folder, output_folder, segment_length=1):
+def convert_mp3_to_wav(input_folder, output_folder, segment_length=3):
     for root, _, files in os.walk(input_folder):
         for file in files:
             if file.endswith(".mp3"):
